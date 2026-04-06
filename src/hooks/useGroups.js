@@ -33,6 +33,7 @@ export function useGroups() {
     if (groupErr) throw groupErr
 
     const unique = [...new Set(nicknames.map((n) => n.trim().toLowerCase()).filter(Boolean))]
+    console.log(`[useGroups] createGroupWithMembers "${name}" — saving ${unique.length} nicknames to Supabase:`, unique)
     if (unique.length > 0) {
       const rows = unique.map((n) => ({ group_id: group.id, player_nickname: n }))
       const { error: membersErr } = await supabase

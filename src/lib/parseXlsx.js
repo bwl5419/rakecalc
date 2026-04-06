@@ -55,5 +55,7 @@ export function parseClubGGFile(arrayBuffer) {
     throw new Error('No player data found in the file. Check that this is the correct export.')
   }
 
+  console.log(`[parseXlsx] parsed ${rows.length} rows. Nicknames (lowercase):`, rows.map((r) => r.nickname.toLowerCase()).sort())
+
   return { periodLabel, rows }
 }

@@ -3,22 +3,66 @@ import { exportPayoutCsv } from '../lib/exportCsv'
 
 const LOW_PAYOUT_THRESHOLD = 1.00
 
-export function PayoutTable({ rows, periodLabel, onTogglePaid, onSaveWeek, onSettleWeek, savedWeekId }) {
-  const [sortDir, setSortDir] = useState('desc') // 'desc' | 'asc'
+const SORT_OPTIONS = [
+  { value: 'file',        label: 'File order' },
+  { value: 'payout-desc', label: 'Payout high → low' },
+  { value: 'payout-asc',  label: 'Payout low → high' },
+  { value: 'rake-desc',   label: 'Rake high → low' },
+  { value: 'rake-asc',    label: 'Rake low → high' },
+  { value: 'name-asc',    label: 'Name A → Z' },
+]
+
+function applySort(rows, sortMode) {
+  const r = [...rows]
+  switch (sortMode) {
+    case 'file':
+      return r.sort((a, b) => a.fileIndex - b.fileIndex)
+    case 'payout-desc':
+      return r.sort((a, b) => b.payout - a.payout)
+    case 'payout-asc':
+      return r.sort((a, b) => a.payout - b.payout)
+    case 'rake-desc':
+      return r.sort((a, b) => b.rakeTotal - a.rakeTotal)
+    case 'rake-asc':
+      return r.sort((a, b) => a.rakeTotal - b.rakeTotal)
+    case 'name-asc':
+      return r.sort((a, b) => a.nickname.localeCompare(b.nickname))
+    default:
+      return r
+  }
+}
+
+export function PayoutTable({ rows, activeGroupMembers, periodLabel, onTogglePaid, onSaveWeek, onSettleWeek, savedWeekId }) {
+  const [sortMode, setSortMode] = useState('file')
   const [hideLow, setHideLow] = useState(false)
   const [newOnly, setNewOnly] = useState(false)
 
   if (!rows || rows.length === 0) return null
 
-  const totalRake = rows.reduce((s, r) => s + r.rakeTotal, 0)
-  const totalPayout = rows.reduce((s, r) => s + r.payout, 0)
-  const allPaid = rows.every((r) => r.paid)
-  const lowCount = rows.filter((r) => r.payout < LOW_PAYOUT_THRESHOLD).length
-  const newCount = rows.filter((r) => r.isNew).length
+  // --- Group filter (case-insensitive) with debug logging ---
+  let filteredRows
+  if (activeGroupMembers) {
+    filteredRows = rows.filter((r) => {
+      const lc = r.nickname.toLowerCase()
+      const match = activeGroupMembers.has(lc)
+      return match
+    })
+    console.log(
+      `[GroupFilter] active group has ${activeGroupMembers.size} members | xlsx has ${rows.length} rows | matched ${filteredRows.length}`,
+      '\nGroup members (lowercase):', [...activeGroupMembers].sort(),
+      '\nXlsx nicknames (lowercase):', rows.map((r) => r.nickname.toLowerCase()).sort()
+    )
+  } else {
+    filteredRows = rows
+  }
 
-  const sorted = [...rows].sort((a, b) =>
-    sortDir === 'desc' ? b.payout - a.payout : a.payout - b.payout
-  )
+  const totalRake = filteredRows.reduce((s, r) => s + r.rakeTotal, 0)
+  const totalPayout = filteredRows.reduce((s, r) => s + r.payout, 0)
+  const allPaid = filteredRows.every((r) => r.paid)
+  const lowCount = filteredRows.filter((r) => r.payout < LOW_PAYOUT_THRESHOLD).length
+  const newCount = filteredRows.filter((r) => r.isNew).length
+
+  const sorted = applySort(filteredRows, sortMode)
   const afterLow = hideLow ? sorted.filter((r) => r.payout >= LOW_PAYOUT_THRESHOLD) : sorted
   const displayed = newOnly ? afterLow.filter((r) => r.isNew) : afterLow
 
@@ -29,6 +73,9 @@ export function PayoutTable({ rows, periodLabel, onTogglePaid, onSaveWeek, onSet
         <div>
           <p className="text-xs text-gray-400 uppercase tracking-wide">Period</p>
           <p className="font-semibold">{periodLabel}</p>
+          {activeGroupMembers && (
+            <p className="text-xs text-blue-400 mt-0.5">{filteredRows.length} players in group</p>
+          )}
         </div>
         <div>
           <p className="text-xs text-gray-400 uppercase tracking-wide">Total Rake</p>
@@ -40,7 +87,7 @@ export function PayoutTable({ rows, periodLabel, onTogglePaid, onSaveWeek, onSet
         </div>
         <div className="flex gap-2">
           <button
-            onClick={() => exportPayoutCsv(rows, periodLabel)}
+            onClick={() => exportPayoutCsv(filteredRows, periodLabel)}
             className="px-3 py-1.5 text-sm bg-white text-gray-900 rounded-lg hover:bg-gray-100 font-medium"
           >
             Export CSV
@@ -69,38 +116,58 @@ export function PayoutTable({ rows, periodLabel, onTogglePaid, onSaveWeek, onSet
         </div>
       </div>
 
-      {/* Filter toggles */}
-      {(lowCount > 0 || newCount > 0) && (
-        <div className="flex items-center justify-between mb-2 px-1 gap-2 flex-wrap">
-          <div className="flex items-center gap-3">
-            {newCount > 0 && (
-              <button
-                onClick={() => setNewOnly((v) => !v)}
-                className={`px-2.5 py-1 text-xs rounded-lg font-medium transition-colors whitespace-nowrap ${
-                  newOnly
-                    ? 'bg-yellow-400 text-yellow-900 hover:bg-yellow-500'
-                    : 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200'
-                }`}
-              >
-                {newOnly ? `Showing ${newCount} new` : `New players only (${newCount})`}
-              </button>
-            )}
-          </div>
-          {lowCount > 0 && (
-            <div className="flex items-center gap-2">
-              <p className="text-xs text-red-500">
-                Rows in red are under $1.00 and are typically not paid out.
-              </p>
-              <button
-                onClick={() => setHideLow((v) => !v)}
-                className="text-xs text-gray-400 hover:text-gray-600 underline whitespace-nowrap"
-              >
-                {hideLow ? `Show ${lowCount} hidden` : `Hide ${lowCount} under $1`}
-              </button>
-            </div>
-          )}
+      {/* No group matches */}
+      {activeGroupMembers && filteredRows.length === 0 && (
+        <div className="mb-3 p-3 bg-yellow-50 border border-yellow-200 rounded-lg text-sm text-yellow-700">
+          No players from this group found in the uploaded file. Check the browser console for a nickname comparison.
         </div>
       )}
+
+      {/* Sort + filter controls */}
+      <div className="flex items-center justify-between mb-2 px-1 gap-2 flex-wrap">
+        <div className="flex items-center gap-3 flex-wrap">
+          {/* Sort select */}
+          <div className="flex items-center gap-1.5">
+            <label className="text-xs text-gray-400">Sort:</label>
+            <select
+              value={sortMode}
+              onChange={(e) => setSortMode(e.target.value)}
+              className="text-xs border border-gray-200 rounded px-2 py-1 text-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white"
+            >
+              {SORT_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+          </div>
+
+          {newCount > 0 && (
+            <button
+              onClick={() => setNewOnly((v) => !v)}
+              className={`px-2.5 py-1 text-xs rounded-lg font-medium transition-colors whitespace-nowrap ${
+                newOnly
+                  ? 'bg-yellow-400 text-yellow-900 hover:bg-yellow-500'
+                  : 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200'
+              }`}
+            >
+              {newOnly ? `Showing ${newCount} new` : `New players only (${newCount})`}
+            </button>
+          )}
+        </div>
+
+        {lowCount > 0 && (
+          <div className="flex items-center gap-2">
+            <p className="text-xs text-red-500">
+              Rows in red are under $1.00 and are typically not paid out.
+            </p>
+            <button
+              onClick={() => setHideLow((v) => !v)}
+              className="text-xs text-gray-400 hover:text-gray-600 underline whitespace-nowrap"
+            >
+              {hideLow ? `Show ${lowCount} hidden` : `Hide ${lowCount} under $1`}
+            </button>
+          </div>
+        )}
+      </div>
 
       {/* Table */}
       <div className="overflow-x-auto rounded-xl border border-gray-200">
@@ -112,18 +179,7 @@ export function PayoutTable({ rows, periodLabel, onTogglePaid, onSaveWeek, onSet
               <th className="px-4 py-3 text-left">Agent</th>
               <th className="px-4 py-3 text-right">Rake Generated</th>
               <th className="px-4 py-3 text-right">Rakeback %</th>
-              <th
-                className="px-4 py-3 text-right cursor-pointer select-none hover:text-gray-800 group"
-                onClick={() => setSortDir((d) => (d === 'desc' ? 'asc' : 'desc'))}
-                title="Click to toggle sort order"
-              >
-                <span className="inline-flex items-center gap-1 justify-end">
-                  Payout Owed
-                  <span className="text-gray-400 group-hover:text-gray-600">
-                    {sortDir === 'desc' ? '↓' : '↑'}
-                  </span>
-                </span>
-              </th>
+              <th className="px-4 py-3 text-right">Payout Owed</th>
               <th className="px-4 py-3 text-center">Paid</th>
             </tr>
           </thead>

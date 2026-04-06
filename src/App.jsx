@@ -43,14 +43,16 @@ export default function App() {
   )
 
   // Compute payout rows by cross-referencing parsed file with roster
+  // fileIndex preserves original file order for sort
   const payoutRows = useMemo(() => {
     if (!parsedFile) return []
-    return parsedFile.rows.map((row) => {
+    return parsedFile.rows.map((row, i) => {
       const player = rosterMap.get(row.nickname)
       const rakebackPct = player ? player.rakeback_pct : defaultPct
       const isNew = !player
       return {
         ...row,
+        fileIndex: i,
         rakebackPct,
         payout: row.rakeTotal * (rakebackPct / 100),
         isNew,
@@ -59,13 +61,11 @@ export default function App() {
     })
   }, [parsedFile, rosterMap, defaultPct, paidSet])
 
-  // Filter payout rows by active group (case-insensitive)
-  const filteredPayoutRows = useMemo(() => {
-    if (!activeGroupId) return payoutRows
-    const members = groupMemberMap.get(activeGroupId)
-    if (!members) return []
-    return payoutRows.filter((r) => members.has(r.nickname.toLowerCase()))
-  }, [payoutRows, activeGroupId, groupMemberMap])
+  // The active group's member set (lowercase nicknames), or null for all players
+  const activeGroupMembers = useMemo(() => {
+    if (!activeGroupId) return null
+    return groupMemberMap.get(activeGroupId) ?? null
+  }, [activeGroupId, groupMemberMap])
 
   const handleFile = useCallback(
     async (arrayBuffer, err) => {
@@ -223,9 +223,9 @@ export default function App() {
                       </button>
                     )
                   })}
-                  {activeGroup && (
+                  {activeGroup && activeGroupMembers && (
                     <span className="text-xs text-gray-400 ml-1">
-                      — {filteredPayoutRows.length} player{filteredPayoutRows.length === 1 ? '' : 's'}
+                      — {activeGroupMembers.size} member{activeGroupMembers.size === 1 ? '' : 's'}
                     </span>
                   )}
                 </div>
@@ -233,7 +233,8 @@ export default function App() {
 
               {parsedFile && (
                 <PayoutTable
-                  rows={filteredPayoutRows}
+                  rows={payoutRows}
+                  activeGroupMembers={activeGroupMembers}
                   periodLabel={parsedFile.periodLabel}
                   onTogglePaid={handleTogglePaid}
                   onSaveWeek={handleSaveWeek}
