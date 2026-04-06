@@ -30,9 +30,11 @@ export default function App() {
   const { history, loading: historyLoading, saveWeek, settleWeek } = useHistory()
   const { groups, groupMemberMap, createGroupWithMembers, deleteGroup, renameGroup, addPlayerToGroup, removePlayerFromGroup } = useGroups()
 
-  // Build a fast lookup map from roster
+  // Build a fast lookup map from roster, keyed by lowercase nickname
+  // so every payout calculation is case-insensitive regardless of how
+  // the player appears in the xlsx vs how they were saved in the roster.
   const rosterMap = useMemo(
-    () => new Map(roster.map((p) => [p.nickname, p])),
+    () => new Map(roster.map((p) => [p.nickname.toLowerCase(), p])),
     [roster]
   )
 
@@ -47,7 +49,7 @@ export default function App() {
   const payoutRows = useMemo(() => {
     if (!parsedFile) return []
     return parsedFile.rows.map((row, i) => {
-      const player = rosterMap.get(row.nickname)
+      const player = rosterMap.get(row.nickname.toLowerCase())
       const rakebackPct = player ? player.rakeback_pct : defaultPct
       const isNew = !player
       return {
