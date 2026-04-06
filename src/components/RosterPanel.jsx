@@ -17,6 +17,14 @@ function parseCsvRoster(text) {
   return rows
 }
 
+// Parse a group CSV: one nickname per line, no header required
+function parseGroupCsv(text) {
+  return text
+    .split(/\r?\n/)
+    .map((l) => l.trim().replace(/^"|"$/g, ''))
+    .filter(Boolean)
+}
+
 function SortHeader({ label, colKey, sortKey, sortDir, onSort, className = '' }) {
   const active = sortKey === colKey
   return (
@@ -48,10 +56,8 @@ export function RosterPanel({
   onResolveGroup,
   groups,
   groupMemberMap,
-  onCreateGroup,
+  onCreateGroupWithMembers,
   onDeleteGroup,
-  onAddPlayersToGroup,
-  onRemovePlayerFromGroup,
   activeGroupId,
   onGroupFilterChange,
 }) {
@@ -73,37 +79,23 @@ export function RosterPanel({
   // Bulk selection
   const [selectedIds, setSelectedIds] = useState(new Set())
 
-  // Groups management state
-  const [newGroupName, setNewGroupName] = useState('')
-  const [showNewGroupForm, setShowNewGroupForm] = useState(false)
-  const [creatingGroup, setCreatingGroup] = useState(false)
-  const [openGroupDropdownId, setOpenGroupDropdownId] = useState(null) // player id
-  const [bulkGroupDropdownOpen, setBulkGroupDropdownOpen] = useState(false)
-  const [assigningGroup, setAssigningGroup] = useState(false)
+  // Group CSV import state
+  const [pendingGroupNicknames, setPendingGroupNicknames] = useState(null) // string[] after parse
+  const [groupName, setGroupName] = useState('')
+  const [savingGroup, setSavingGroup] = useState(false)
+  const [groupImportStatus, setGroupImportStatus] = useState(null)
 
   const debounceTimers = useRef({})
   const importInputRef = useRef(null)
+  const groupImportInputRef = useRef(null)
   const searchRef = useRef(null)
   const selectAllRef = useRef(null)
-  const newGroupInputRef = useRef(null)
+  const groupNameInputRef = useRef(null)
 
-  // Close group dropdowns when clicking outside
+  // Focus group name input when prompt appears
   useEffect(() => {
-    if (!openGroupDropdownId && !bulkGroupDropdownOpen) return
-    const handler = (e) => {
-      if (!e.target.closest('[data-group-dropdown]')) {
-        setOpenGroupDropdownId(null)
-        setBulkGroupDropdownOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [openGroupDropdownId, bulkGroupDropdownOpen])
-
-  // Focus new group input when form opens
-  useEffect(() => {
-    if (showNewGroupForm) newGroupInputRef.current?.focus()
-  }, [showNewGroupForm])
+    if (pendingGroupNicknames) groupNameInputRef.current?.focus()
+  }, [pendingGroupNicknames])
 
   const handlePctChange = (id, value) => {
     const num = parseFloat(value)
@@ -170,6 +162,49 @@ export function RosterPanel({
     reader.readAsText(file)
   }
 
+  // Group CSV: parse nicknames-only file and show name prompt
+  const handleGroupImportFile = (e) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = (ev) => {
+      const nicknames = parseGroupCsv(ev.target.result)
+      if (nicknames.length === 0) {
+        setGroupImportStatus({ error: 'No nicknames found in file.' })
+        setTimeout(() => setGroupImportStatus(null), 5000)
+        return
+      }
+      const today = new Date().toISOString().slice(0, 10)
+      setGroupName(today)
+      setPendingGroupNicknames(nicknames)
+    }
+    reader.readAsText(file)
+  }
+
+  const handleSaveGroup = async (e) => {
+    e.preventDefault()
+    const name = groupName.trim()
+    if (!name || !pendingGroupNicknames?.length) return
+    setSavingGroup(true)
+    try {
+      await onCreateGroupWithMembers(name, pendingGroupNicknames)
+      setGroupImportStatus({ created: pendingGroupNicknames.length, name })
+      setPendingGroupNicknames(null)
+      setGroupName('')
+      setTimeout(() => setGroupImportStatus(null), 5000)
+    } catch (err) {
+      setGroupImportStatus({ error: err.message })
+    } finally {
+      setSavingGroup(false)
+    }
+  }
+
+  const handleCancelGroup = () => {
+    setPendingGroupNicknames(null)
+    setGroupName('')
+  }
+
   const handleSort = (col) => {
     if (sortKey === col) {
       setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
@@ -226,20 +261,6 @@ export function RosterPanel({
     }
   }
 
-  const handleCreateGroup = async (e) => {
-    e.preventDefault()
-    const name = newGroupName.trim()
-    if (!name) return
-    setCreatingGroup(true)
-    try {
-      await onCreateGroup(name)
-      setNewGroupName('')
-      setShowNewGroupForm(false)
-    } finally {
-      setCreatingGroup(false)
-    }
-  }
-
   const handleDeleteGroup = async (e, groupId) => {
     e.stopPropagation()
     const group = groups.find((g) => g.id === groupId)
@@ -248,39 +269,16 @@ export function RosterPanel({
     if (activeGroupId === groupId) onGroupFilterChange(null)
   }
 
-  const handleTogglePlayerInGroup = async (groupId, nickname) => {
-    const members = groupMemberMap.get(groupId)
-    const isMember = members?.has(nickname)
-    if (isMember) {
-      await onRemovePlayerFromGroup(groupId, nickname)
-    } else {
-      await onAddPlayersToGroup(groupId, [nickname])
-    }
-  }
-
-  const handleBulkAddToGroup = async (groupId) => {
-    const nicknames = [...selectedIds]
-      .map((id) => roster.find((p) => p.id === id)?.nickname)
-      .filter(Boolean)
-    if (!nicknames.length) return
-    setAssigningGroup(true)
-    setBulkGroupDropdownOpen(false)
-    try {
-      await onAddPlayersToGroup(groupId, nicknames)
-    } finally {
-      setAssigningGroup(false)
-    }
-  }
-
   // Derived: filter → sort → paginate
   const filtered = useMemo(() => {
     let result = roster
     if (thisWeekOnly && thisWeekNicknames) {
       result = result.filter((p) => thisWeekNicknames.has(p.nickname))
     }
+    // Sync roster view with active group filter (case-insensitive)
     if (activeGroupId) {
       const members = groupMemberMap.get(activeGroupId)
-      result = result.filter((p) => members?.has(p.nickname))
+      result = result.filter((p) => members?.has(p.nickname.toLowerCase()))
     }
     if (search.trim()) {
       const q = search.trim().toLowerCase()
@@ -329,6 +327,20 @@ export function RosterPanel({
         <div className="flex items-center gap-2">
           <span className="text-xs text-gray-400">{roster.length} players</span>
           <button
+            onClick={() => groupImportInputRef.current?.click()}
+            className="px-2.5 py-1 text-xs bg-blue-50 hover:bg-blue-100 text-blue-600 border border-blue-200 rounded-lg font-medium transition-colors"
+            title="Import a list of nicknames to create a group"
+          >
+            Import Group CSV
+          </button>
+          <input
+            ref={groupImportInputRef}
+            type="file"
+            accept=".csv,.txt,text/csv,text/plain"
+            className="hidden"
+            onChange={handleGroupImportFile}
+          />
+          <button
             onClick={() => importInputRef.current?.click()}
             disabled={importing}
             className="px-2.5 py-1 text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-lg font-medium transition-colors disabled:opacity-40"
@@ -345,6 +357,77 @@ export function RosterPanel({
           />
         </div>
       </div>
+
+      {/* Group name prompt — shown after CSV parse */}
+      {pendingGroupNicknames && (
+        <div className="mb-3 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+          <p className="text-xs text-blue-700 font-medium mb-2">
+            {pendingGroupNicknames.length} nickname{pendingGroupNicknames.length === 1 ? '' : 's'} found — name this group:
+          </p>
+          <form onSubmit={handleSaveGroup} className="flex gap-2">
+            <input
+              ref={groupNameInputRef}
+              type="text"
+              value={groupName}
+              onChange={(e) => setGroupName(e.target.value)}
+              placeholder="Group name…"
+              className="flex-1 text-sm border border-blue-300 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white"
+            />
+            <button
+              type="submit"
+              disabled={savingGroup || !groupName.trim()}
+              className="px-3 py-1 text-xs bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white rounded font-medium transition-colors"
+            >
+              {savingGroup ? 'Saving…' : 'Save group'}
+            </button>
+            <button
+              type="button"
+              onClick={handleCancelGroup}
+              className="px-3 py-1 text-xs bg-white hover:bg-gray-100 text-gray-500 border border-gray-200 rounded font-medium transition-colors"
+            >
+              Cancel
+            </button>
+          </form>
+        </div>
+      )}
+
+      {/* Group import status */}
+      {groupImportStatus && (
+        <div className={`mb-3 px-3 py-2 rounded-lg text-xs font-medium ${
+          groupImportStatus.error
+            ? 'bg-red-50 text-red-700 border border-red-200'
+            : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+        }`}>
+          {groupImportStatus.error
+            ? `Group import failed: ${groupImportStatus.error}`
+            : `Group "${groupImportStatus.name}" saved with ${groupImportStatus.created} players`}
+        </div>
+      )}
+
+      {/* Saved groups — list with delete option */}
+      {groups.length > 0 && (
+        <div className="mb-3 flex flex-wrap gap-1.5">
+          {groups.map((g) => {
+            const memberCount = groupMemberMap.get(g.id)?.size ?? 0
+            return (
+              <span
+                key={g.id}
+                className="inline-flex items-center gap-1 pl-2.5 pr-1 py-1 text-xs rounded-full bg-blue-50 text-blue-700 border border-blue-200"
+              >
+                <span className="font-medium">{g.name}</span>
+                <span className="text-blue-400">({memberCount})</span>
+                <button
+                  onClick={(e) => handleDeleteGroup(e, g.id)}
+                  className="w-4 h-4 flex items-center justify-center rounded-full text-blue-400 hover:text-blue-700 hover:bg-blue-100 transition-colors"
+                  title={`Delete group "${g.name}"`}
+                >
+                  ×
+                </button>
+              </span>
+            )
+          })}
+        </div>
+      )}
 
       {/* Import status */}
       {importStatus && (
@@ -378,77 +461,6 @@ export function RosterPanel({
         <span className="text-xs text-blue-500 ml-1">applied to new players</span>
       </div>
 
-      {/* Groups section */}
-      <div className="mb-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Groups</span>
-          <button
-            onClick={() => setShowNewGroupForm((v) => !v)}
-            className="px-2 py-0.5 text-xs bg-white hover:bg-gray-100 text-gray-600 border border-gray-200 rounded-lg font-medium transition-colors"
-          >
-            {showNewGroupForm ? 'Cancel' : '+ New Group'}
-          </button>
-        </div>
-
-        {showNewGroupForm && (
-          <form onSubmit={handleCreateGroup} className="flex gap-2 mb-2">
-            <input
-              ref={newGroupInputRef}
-              type="text"
-              placeholder="Group name…"
-              value={newGroupName}
-              onChange={(e) => setNewGroupName(e.target.value)}
-              className="flex-1 text-xs border border-gray-200 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-400"
-            />
-            <button
-              type="submit"
-              disabled={creatingGroup || !newGroupName.trim()}
-              className="px-2.5 py-1 text-xs bg-blue-500 hover:bg-blue-600 disabled:opacity-40 text-white rounded font-medium transition-colors"
-            >
-              {creatingGroup ? '…' : 'Create'}
-            </button>
-          </form>
-        )}
-
-        <div className="flex flex-wrap gap-1.5">
-          <button
-            onClick={() => onGroupFilterChange(null)}
-            className={`px-2.5 py-1 text-xs rounded-full font-medium transition-colors ${
-              activeGroupId === null
-                ? 'bg-gray-800 text-white'
-                : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-100'
-            }`}
-          >
-            All players
-          </button>
-          {groups.map((g) => (
-            <span
-              key={g.id}
-              className={`inline-flex items-center gap-1 pl-2.5 pr-1 py-1 text-xs rounded-full font-medium transition-colors cursor-pointer ${
-                activeGroupId === g.id
-                  ? 'bg-blue-500 text-white'
-                  : 'bg-white text-blue-700 border border-blue-200 hover:bg-blue-50'
-              }`}
-              onClick={() => onGroupFilterChange(activeGroupId === g.id ? null : g.id)}
-            >
-              {g.name}
-              <button
-                onClick={(e) => handleDeleteGroup(e, g.id)}
-                className={`w-4 h-4 flex items-center justify-center rounded-full text-xs hover:bg-black/10 transition-colors ${
-                  activeGroupId === g.id ? 'text-white/70 hover:text-white' : 'text-blue-400 hover:text-blue-700'
-                }`}
-                title={`Delete group "${g.name}"`}
-              >
-                ×
-              </button>
-            </span>
-          ))}
-          {groups.length === 0 && !showNewGroupForm && (
-            <span className="text-xs text-gray-300 italic">No groups yet</span>
-          )}
-        </div>
-      </div>
-
       {/* Search + This week toggle + Group filter */}
       <div className="flex gap-2 mb-2">
         <div className="relative flex-1">
@@ -474,7 +486,7 @@ export function RosterPanel({
           <select
             value={activeGroupId ?? ''}
             onChange={(e) => onGroupFilterChange(e.target.value || null)}
-            className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 text-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white"
+            className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 text-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white max-w-[120px]"
           >
             <option value="">All groups</option>
             {groups.map((g) => (
@@ -498,43 +510,17 @@ export function RosterPanel({
         </button>
       </div>
 
-      {/* Bulk action bar */}
+      {/* Bulk delete bar */}
       {selectedIds.size > 0 && (
         <div className="flex items-center justify-between mb-2 px-1">
           <span className="text-xs text-gray-500">{selectedIds.size} selected</span>
-          <div className="flex items-center gap-2">
-            {groups.length > 0 && (
-              <div className="relative" data-group-dropdown>
-                <button
-                  onClick={() => setBulkGroupDropdownOpen((v) => !v)}
-                  disabled={assigningGroup}
-                  className="px-3 py-1 text-xs bg-blue-100 hover:bg-blue-200 disabled:opacity-40 text-blue-700 rounded-lg font-medium transition-colors"
-                >
-                  {assigningGroup ? 'Adding…' : `Add to group ▾`}
-                </button>
-                {bulkGroupDropdownOpen && (
-                  <div className="absolute right-0 top-full mt-1 z-20 bg-white border border-gray-200 rounded-lg shadow-lg min-w-[160px] py-1">
-                    {groups.map((g) => (
-                      <button
-                        key={g.id}
-                        onClick={() => handleBulkAddToGroup(g.id)}
-                        className="w-full text-left px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 transition-colors"
-                      >
-                        {g.name}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-            <button
-              onClick={handleBulkDelete}
-              disabled={deleting}
-              className="px-3 py-1 text-xs bg-red-500 hover:bg-red-600 disabled:opacity-40 text-white rounded-lg font-medium transition-colors"
-            >
-              {deleting ? 'Deleting…' : `Delete (${selectedIds.size})`}
-            </button>
-          </div>
+          <button
+            onClick={handleBulkDelete}
+            disabled={deleting}
+            className="px-3 py-1 text-xs bg-red-500 hover:bg-red-600 disabled:opacity-40 text-white rounded-lg font-medium transition-colors"
+          >
+            {deleting ? 'Deleting…' : `Delete selected (${selectedIds.size})`}
+          </button>
         </div>
       )}
 
@@ -557,7 +543,7 @@ export function RosterPanel({
               <SortHeader label="Nickname" colKey="nickname" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} className="px-3 text-left" />
               <SortHeader label="%" colKey="rakeback_pct" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} className="px-3 text-right" />
               <SortHeader label="Last Seen" colKey="last_seen" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} className="px-3 text-center" />
-              <th className="px-3 py-2 w-16"></th>
+              <th className="px-3 py-2"></th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
@@ -606,50 +592,13 @@ export function RosterPanel({
                   {player.last_seen || '—'}
                 </td>
                 <td className="px-3 py-2 text-center">
-                  <div className="flex items-center justify-center gap-1.5">
-                    {groups.length > 0 && (
-                      <div className="relative" data-group-dropdown>
-                        <button
-                          onClick={() =>
-                            setOpenGroupDropdownId((prev) =>
-                              prev === player.id ? null : player.id
-                            )
-                          }
-                          className="text-blue-300 hover:text-blue-500 transition-colors text-xs font-semibold leading-none"
-                          title="Add to group"
-                        >
-                          +G
-                        </button>
-                        {openGroupDropdownId === player.id && (
-                          <div className="absolute right-0 top-full mt-1 z-20 bg-white border border-gray-200 rounded-lg shadow-lg min-w-[160px] py-1">
-                            {groups.map((g) => {
-                              const isMember = groupMemberMap.get(g.id)?.has(player.nickname)
-                              return (
-                                <button
-                                  key={g.id}
-                                  onClick={() => {
-                                    handleTogglePlayerInGroup(g.id, player.nickname)
-                                    setOpenGroupDropdownId(null)
-                                  }}
-                                  className="w-full text-left px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 transition-colors flex items-center justify-between gap-2"
-                                >
-                                  <span>{g.name}</span>
-                                  {isMember && <span className="text-blue-400 text-xs">✓</span>}
-                                </button>
-                              )
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    )}
-                    <button
-                      onClick={() => onRemovePlayer(player.id)}
-                      className="text-gray-300 hover:text-red-400 transition-colors text-base leading-none"
-                      title="Remove player"
-                    >
-                      ×
-                    </button>
-                  </div>
+                  <button
+                    onClick={() => onRemovePlayer(player.id)}
+                    className="text-gray-300 hover:text-red-400 transition-colors text-base leading-none"
+                    title="Remove player"
+                  >
+                    ×
+                  </button>
                 </td>
               </tr>
             ))}

@@ -3,7 +3,7 @@ import { exportPayoutCsv } from '../lib/exportCsv'
 
 const LOW_PAYOUT_THRESHOLD = 1.00
 
-export function PayoutTable({ rows, periodLabel, onTogglePaid, onSaveWeek, onSettleWeek, savedWeekId, activeGroupName }) {
+export function PayoutTable({ rows, periodLabel, onTogglePaid, onSaveWeek, onSettleWeek, savedWeekId }) {
   const [sortDir, setSortDir] = useState('desc') // 'desc' | 'asc'
   const [hideLow, setHideLow] = useState(false)
   const [newOnly, setNewOnly] = useState(false)
@@ -29,9 +29,6 @@ export function PayoutTable({ rows, periodLabel, onTogglePaid, onSaveWeek, onSet
         <div>
           <p className="text-xs text-gray-400 uppercase tracking-wide">Period</p>
           <p className="font-semibold">{periodLabel}</p>
-          {activeGroupName && (
-            <p className="text-xs text-blue-300 mt-0.5">{activeGroupName}</p>
-          )}
         </div>
         <div>
           <p className="text-xs text-gray-400 uppercase tracking-wide">Total Rake</p>
