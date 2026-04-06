@@ -2,6 +2,7 @@ import { useState, useMemo, useCallback } from 'react'
 import { parseClubGGFile } from './lib/parseXlsx'
 import { useRoster } from './hooks/useRoster'
 import { useHistory } from './hooks/useHistory'
+import { useGroups } from './hooks/useGroups'
 import { UploadZone } from './components/UploadZone'
 import { PayoutTable } from './components/PayoutTable'
 import { RosterPanel } from './components/RosterPanel'
@@ -23,9 +24,11 @@ export default function App() {
   const [defaultPct, setDefaultPct] = useState(getStoredDefaultPct)
   const [savedWeekId, setSavedWeekId] = useState(null)
   const [syncing, setSyncing] = useState(false)
+  const [activeGroupId, setActiveGroupId] = useState(null)
 
   const { roster, loading: rosterLoading, updatePct, addPlayer, removePlayer, bulkRemovePlayers, syncFromFile, importFromCsv, duplicateGroups, resolveGroup } = useRoster()
   const { history, loading: historyLoading, saveWeek, settleWeek } = useHistory()
+  const { groups, groupMemberMap, createGroup, deleteGroup, addPlayersToGroup, removePlayerFromGroup } = useGroups()
 
   // Build a fast lookup map from roster
   const rosterMap = useMemo(
@@ -37,6 +40,12 @@ export default function App() {
   const thisWeekNicknames = useMemo(
     () => parsedFile ? new Set(parsedFile.rows.map((r) => r.nickname)) : null,
     [parsedFile]
+  )
+
+  // Active group name for display
+  const activeGroupName = useMemo(
+    () => (activeGroupId ? (groups.find((g) => g.id === activeGroupId)?.name ?? null) : null),
+    [activeGroupId, groups]
   )
 
   // Compute payout rows by cross-referencing parsed file with roster
@@ -55,6 +64,14 @@ export default function App() {
       }
     })
   }, [parsedFile, rosterMap, defaultPct, paidSet])
+
+  // Filter payout rows by active group
+  const filteredPayoutRows = useMemo(() => {
+    if (!activeGroupId) return payoutRows
+    const members = groupMemberMap.get(activeGroupId)
+    if (!members) return []
+    return payoutRows.filter((r) => members.has(r.nickname))
+  }, [payoutRows, activeGroupId, groupMemberMap])
 
   const handleFile = useCallback(
     async (arrayBuffer, err) => {
@@ -163,7 +180,14 @@ export default function App() {
       {/* Main content */}
       <main className="max-w-screen-xl mx-auto px-4 py-6">
         {tab === 'history' ? (
-          <HistoryView history={history} loading={historyLoading} />
+          <HistoryView
+            history={history}
+            loading={historyLoading}
+            groups={groups}
+            groupMemberMap={groupMemberMap}
+            activeGroupId={activeGroupId}
+            onGroupFilterChange={setActiveGroupId}
+          />
         ) : (
           <div className="flex flex-col lg:flex-row gap-6">
             {/* Left panel — upload + payout */}
@@ -182,12 +206,13 @@ export default function App() {
 
               {parsedFile && (
                 <PayoutTable
-                  rows={payoutRows}
+                  rows={filteredPayoutRows}
                   periodLabel={parsedFile.periodLabel}
                   onTogglePaid={handleTogglePaid}
                   onSaveWeek={handleSaveWeek}
                   onSettleWeek={handleSettleWeek}
                   savedWeekId={savedWeekId}
+                  activeGroupName={activeGroupName}
                 />
               )}
 
@@ -216,6 +241,14 @@ export default function App() {
                     thisWeekNicknames={thisWeekNicknames}
                     duplicateGroups={duplicateGroups}
                     onResolveGroup={resolveGroup}
+                    groups={groups}
+                    groupMemberMap={groupMemberMap}
+                    onCreateGroup={createGroup}
+                    onDeleteGroup={deleteGroup}
+                    onAddPlayersToGroup={addPlayersToGroup}
+                    onRemovePlayerFromGroup={removePlayerFromGroup}
+                    activeGroupId={activeGroupId}
+                    onGroupFilterChange={setActiveGroupId}
                   />
                 )}
               </div>
