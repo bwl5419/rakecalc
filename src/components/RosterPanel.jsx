@@ -22,11 +22,11 @@ function parseCsvRoster(text) {
 //   - 2 columns: nickname, rakeback% (% symbol stripped automatically)
 // Returns { nicknames: string[], pctUpdates: {nickname, rakeback_pct}[] }
 function parseGroupCsv(text) {
-  const nicknames = []
-  const pctUpdates = []
+  // Use a Map keyed on lowercase nickname so later rows overwrite earlier ones,
+  // giving us automatic deduplication (last occurrence wins).
+  const seen = new Map() // lowercase nickname -> { nickname, rakeback_pct? }
 
   for (const rawLine of text.split(/\r?\n/)) {
-    // Split on comma, strip outer quotes, trim, remove hidden unicode chars
     const cols = rawLine
       .split(',')
       .map((c) =>
@@ -40,13 +40,25 @@ function parseGroupCsv(text) {
     const nickname = cols[0]
     if (!nickname) continue
 
-    nicknames.push(nickname)
+    const entry = { nickname }
 
     if (cols.length >= 2 && cols[1]) {
       const pct = parseFloat(cols[1].replace('%', '').trim())
       if (!isNaN(pct) && pct >= 0 && pct <= 100) {
-        pctUpdates.push({ nickname, rakeback_pct: pct })
+        entry.rakeback_pct = pct
       }
+    }
+
+    seen.set(nickname.toLowerCase(), entry)
+  }
+
+  const nicknames = []
+  const pctUpdates = []
+
+  for (const entry of seen.values()) {
+    nicknames.push(entry.nickname)
+    if (entry.rakeback_pct !== undefined) {
+      pctUpdates.push({ nickname: entry.nickname, rakeback_pct: entry.rakeback_pct })
     }
   }
 
