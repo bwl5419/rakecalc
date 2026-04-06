@@ -22,9 +22,9 @@ export function useGroups() {
     fetchGroups()
   }, [fetchGroups])
 
-  // Create a group and populate it with members in one shot
+  // Create a group and populate it with members in one shot.
+  // Nicknames are lowercased before storage so matching is always case-insensitive.
   const createGroupWithMembers = useCallback(async (name, nicknames) => {
-    // Insert the group
     const { data: group, error: groupErr } = await supabase
       .from('player_groups')
       .insert({ name: name.trim() })
@@ -32,8 +32,7 @@ export function useGroups() {
       .single()
     if (groupErr) throw groupErr
 
-    // Insert members (deduplicated, lowercased for consistent storage)
-    const unique = [...new Set(nicknames.map((n) => n.trim()).filter(Boolean))]
+    const unique = [...new Set(nicknames.map((n) => n.trim().toLowerCase()).filter(Boolean))]
     if (unique.length > 0) {
       const rows = unique.map((n) => ({ group_id: group.id, player_nickname: n }))
       const { error: membersErr } = await supabase
@@ -54,7 +53,48 @@ export function useGroups() {
     setGroupMembers((prev) => prev.filter((m) => m.group_id !== id))
   }, [])
 
-  // groupId -> Set<lowercase nickname> for case-insensitive matching
+  const renameGroup = useCallback(async (id, newName) => {
+    const { data, error } = await supabase
+      .from('player_groups')
+      .update({ name: newName.trim() })
+      .eq('id', id)
+      .select()
+      .single()
+    if (error) throw error
+    setGroups((prev) => prev.map((g) => (g.id === id ? data : g)))
+  }, [])
+
+  // Add a single player to a group (lowercase nickname for consistent storage)
+  const addPlayerToGroup = useCallback(async (groupId, nickname) => {
+    const lc = nickname.trim().toLowerCase()
+    const { error } = await supabase
+      .from('player_group_members')
+      .upsert(
+        { group_id: groupId, player_nickname: lc },
+        { onConflict: 'group_id,player_nickname', ignoreDuplicates: true }
+      )
+    if (error) throw error
+    setGroupMembers((prev) => {
+      const exists = prev.some((m) => m.group_id === groupId && m.player_nickname === lc)
+      return exists ? prev : [...prev, { group_id: groupId, player_nickname: lc }]
+    })
+  }, [])
+
+  // Remove a single player from a group
+  const removePlayerFromGroup = useCallback(async (groupId, nickname) => {
+    const lc = nickname.trim().toLowerCase()
+    const { error } = await supabase
+      .from('player_group_members')
+      .delete()
+      .eq('group_id', groupId)
+      .eq('player_nickname', lc)
+    if (error) throw error
+    setGroupMembers((prev) =>
+      prev.filter((m) => !(m.group_id === groupId && m.player_nickname === lc))
+    )
+  }, [])
+
+  // groupId -> Set<lowercase nickname>
   const groupMemberMap = useMemo(() => {
     const map = new Map()
     for (const m of groupMembers) {
@@ -70,5 +110,8 @@ export function useGroups() {
     loading,
     createGroupWithMembers,
     deleteGroup,
+    renameGroup,
+    addPlayerToGroup,
+    removePlayerFromGroup,
   }
 }

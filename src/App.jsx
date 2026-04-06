@@ -28,7 +28,7 @@ export default function App() {
 
   const { roster, loading: rosterLoading, updatePct, addPlayer, removePlayer, bulkRemovePlayers, syncFromFile, importFromCsv, duplicateGroups, resolveGroup } = useRoster()
   const { history, loading: historyLoading, saveWeek, settleWeek } = useHistory()
-  const { groups, groupMemberMap, createGroupWithMembers, deleteGroup } = useGroups()
+  const { groups, groupMemberMap, createGroupWithMembers, deleteGroup, renameGroup, addPlayerToGroup, removePlayerFromGroup } = useGroups()
 
   // Build a fast lookup map from roster
   const rosterMap = useMemo(
@@ -207,19 +207,22 @@ export default function App() {
                   >
                     All players
                   </button>
-                  {groups.map((g) => (
-                    <button
-                      key={g.id}
-                      onClick={() => setActiveGroupId(activeGroupId === g.id ? null : g.id)}
-                      className={`px-3 py-1.5 text-xs rounded-lg font-medium transition-colors ${
-                        activeGroupId === g.id
-                          ? 'bg-blue-600 text-white'
-                          : 'bg-white text-blue-700 border border-blue-200 hover:bg-blue-50'
-                      }`}
-                    >
-                      {g.name}
-                    </button>
-                  ))}
+                  {groups.map((g) => {
+                    const count = groupMemberMap.get(g.id)?.size ?? 0
+                    return (
+                      <button
+                        key={g.id}
+                        onClick={() => setActiveGroupId(activeGroupId === g.id ? null : g.id)}
+                        className={`px-3 py-1.5 text-xs rounded-lg font-medium transition-colors ${
+                          activeGroupId === g.id
+                            ? 'bg-blue-600 text-white'
+                            : 'bg-white text-blue-700 border border-blue-200 hover:bg-blue-50'
+                        }`}
+                      >
+                        {g.name} ({count})
+                      </button>
+                    )
+                  })}
                   {activeGroup && (
                     <span className="text-xs text-gray-400 ml-1">
                       — {filteredPayoutRows.length} player{filteredPayoutRows.length === 1 ? '' : 's'}
@@ -268,6 +271,9 @@ export default function App() {
                     groupMemberMap={groupMemberMap}
                     onCreateGroupWithMembers={createGroupWithMembers}
                     onDeleteGroup={deleteGroup}
+                    onRenameGroup={renameGroup}
+                    onAddPlayerToGroup={addPlayerToGroup}
+                    onRemovePlayerFromGroup={removePlayerFromGroup}
                     activeGroupId={activeGroupId}
                     onGroupFilterChange={setActiveGroupId}
                   />

@@ -17,7 +17,6 @@ function parseCsvRoster(text) {
   return rows
 }
 
-// Parse a group CSV: one nickname per line, no header required
 function parseGroupCsv(text) {
   return text
     .split(/\r?\n/)
@@ -58,6 +57,9 @@ export function RosterPanel({
   groupMemberMap,
   onCreateGroupWithMembers,
   onDeleteGroup,
+  onRenameGroup,
+  onAddPlayerToGroup,
+  onRemovePlayerFromGroup,
   activeGroupId,
   onGroupFilterChange,
 }) {
@@ -69,7 +71,7 @@ export function RosterPanel({
   const [importing, setImporting] = useState(false)
   const [deleting, setDeleting] = useState(false)
 
-  // Filter / sort / paginate state
+  // Filter / sort / paginate
   const [search, setSearch] = useState('')
   const [sortKey, setSortKey] = useState('last_seen')
   const [sortDir, setSortDir] = useState('desc')
@@ -79,11 +81,19 @@ export function RosterPanel({
   // Bulk selection
   const [selectedIds, setSelectedIds] = useState(new Set())
 
-  // Group CSV import state
-  const [pendingGroupNicknames, setPendingGroupNicknames] = useState(null) // string[] after parse
+  // Group CSV import
+  const [pendingGroupNicknames, setPendingGroupNicknames] = useState(null)
   const [groupName, setGroupName] = useState('')
   const [savingGroup, setSavingGroup] = useState(false)
   const [groupImportStatus, setGroupImportStatus] = useState(null)
+
+  // Inline rename state: which group is being renamed
+  const [renamingGroupId, setRenamingGroupId] = useState(null)
+  const [renameValue, setRenameValue] = useState('')
+  const [renamingSaving, setRenamingSaving] = useState(false)
+
+  // Per-row group membership toggle loading
+  const [togglingMembership, setTogglingMembership] = useState(new Set())
 
   const debounceTimers = useRef({})
   const importInputRef = useRef(null)
@@ -91,11 +101,15 @@ export function RosterPanel({
   const searchRef = useRef(null)
   const selectAllRef = useRef(null)
   const groupNameInputRef = useRef(null)
+  const renameInputRef = useRef(null)
 
-  // Focus group name input when prompt appears
   useEffect(() => {
     if (pendingGroupNicknames) groupNameInputRef.current?.focus()
   }, [pendingGroupNicknames])
+
+  useEffect(() => {
+    if (renamingGroupId) renameInputRef.current?.focus()
+  }, [renamingGroupId])
 
   const handlePctChange = (id, value) => {
     const num = parseFloat(value)
@@ -136,10 +150,9 @@ export function RosterPanel({
     }
     const reader = new FileReader()
     reader.onload = async (ev) => {
-      const text = ev.target.result
       let rows
       try {
-        rows = parseCsvRoster(text)
+        rows = parseCsvRoster(ev.target.result)
       } catch {
         setImportStatus({ error: 'Failed to parse CSV.' })
         return
@@ -162,7 +175,6 @@ export function RosterPanel({
     reader.readAsText(file)
   }
 
-  // Group CSV: parse nicknames-only file and show name prompt
   const handleGroupImportFile = (e) => {
     const file = e.target.files?.[0]
     e.target.value = ''
@@ -175,8 +187,7 @@ export function RosterPanel({
         setTimeout(() => setGroupImportStatus(null), 5000)
         return
       }
-      const today = new Date().toISOString().slice(0, 10)
-      setGroupName(today)
+      setGroupName(new Date().toISOString().slice(0, 10))
       setPendingGroupNicknames(nicknames)
     }
     reader.readAsText(file)
@@ -205,6 +216,50 @@ export function RosterPanel({
     setGroupName('')
   }
 
+  const handleStartRename = (g) => {
+    setRenamingGroupId(g.id)
+    setRenameValue(g.name)
+  }
+
+  const handleSaveRename = async (e) => {
+    e.preventDefault()
+    if (!renameValue.trim() || !renamingGroupId) return
+    setRenamingSaving(true)
+    try {
+      await onRenameGroup(renamingGroupId, renameValue)
+      setRenamingGroupId(null)
+      setRenameValue('')
+    } finally {
+      setRenamingSaving(false)
+    }
+  }
+
+  const handleCancelRename = () => {
+    setRenamingGroupId(null)
+    setRenameValue('')
+  }
+
+  const handleToggleMembership = async (player) => {
+    if (!activeGroupId) return
+    const id = player.id
+    const members = groupMemberMap.get(activeGroupId)
+    const isMember = members?.has(player.nickname.toLowerCase())
+    setTogglingMembership((prev) => new Set(prev).add(id))
+    try {
+      if (isMember) {
+        await onRemovePlayerFromGroup(activeGroupId, player.nickname)
+      } else {
+        await onAddPlayerToGroup(activeGroupId, player.nickname)
+      }
+    } finally {
+      setTogglingMembership((prev) => {
+        const next = new Set(prev)
+        next.delete(id)
+        return next
+      })
+    }
+  }
+
   const handleSort = (col) => {
     if (sortKey === col) {
       setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
@@ -231,11 +286,8 @@ export function RosterPanel({
     const allSelected = pageIds.every((id) => selectedIds.has(id))
     setSelectedIds((prev) => {
       const next = new Set(prev)
-      if (allSelected) {
-        pageIds.forEach((id) => next.delete(id))
-      } else {
-        pageIds.forEach((id) => next.add(id))
-      }
+      if (allSelected) pageIds.forEach((id) => next.delete(id))
+      else pageIds.forEach((id) => next.add(id))
       return next
     })
   }
@@ -269,23 +321,18 @@ export function RosterPanel({
     if (activeGroupId === groupId) onGroupFilterChange(null)
   }
 
-  // Derived: filter → sort → paginate
+  // Filter → sort → paginate (no group-membership filter here — roster always shows all players)
   const filtered = useMemo(() => {
     let result = roster
     if (thisWeekOnly && thisWeekNicknames) {
       result = result.filter((p) => thisWeekNicknames.has(p.nickname))
-    }
-    // Sync roster view with active group filter (case-insensitive)
-    if (activeGroupId) {
-      const members = groupMemberMap.get(activeGroupId)
-      result = result.filter((p) => members?.has(p.nickname.toLowerCase()))
     }
     if (search.trim()) {
       const q = search.trim().toLowerCase()
       result = result.filter((p) => p.nickname.toLowerCase().includes(q))
     }
     return result
-  }, [roster, search, thisWeekOnly, thisWeekNicknames, activeGroupId, groupMemberMap])
+  }, [roster, search, thisWeekOnly, thisWeekNicknames])
 
   const sorted = useMemo(() => {
     return [...filtered].sort((a, b) => {
@@ -295,7 +342,6 @@ export function RosterPanel({
       } else if (sortKey === 'rakeback_pct') {
         cmp = a.rakeback_pct - b.rakeback_pct
       } else {
-        // last_seen: nulls always last
         if (!a.last_seen && !b.last_seen) cmp = 0
         else if (!a.last_seen) cmp = 1
         else if (!b.last_seen) cmp = -1
@@ -318,6 +364,8 @@ export function RosterPanel({
       selectAllRef.current.indeterminate = somePageSelected && !allPageSelected
     }
   })
+
+  const activeMembers = activeGroupId ? groupMemberMap.get(activeGroupId) : null
 
   return (
     <div className="flex flex-col h-full">
@@ -358,7 +406,7 @@ export function RosterPanel({
         </div>
       </div>
 
-      {/* Group name prompt — shown after CSV parse */}
+      {/* Group name prompt */}
       {pendingGroupNicknames && (
         <div className="mb-3 p-3 bg-blue-50 border border-blue-200 rounded-lg">
           <p className="text-xs text-blue-700 font-medium mb-2">
@@ -380,11 +428,8 @@ export function RosterPanel({
             >
               {savingGroup ? 'Saving…' : 'Save group'}
             </button>
-            <button
-              type="button"
-              onClick={handleCancelGroup}
-              className="px-3 py-1 text-xs bg-white hover:bg-gray-100 text-gray-500 border border-gray-200 rounded font-medium transition-colors"
-            >
+            <button type="button" onClick={handleCancelGroup}
+              className="px-3 py-1 text-xs bg-white hover:bg-gray-100 text-gray-500 border border-gray-200 rounded font-medium transition-colors">
               Cancel
             </button>
           </form>
@@ -404,25 +449,55 @@ export function RosterPanel({
         </div>
       )}
 
-      {/* Saved groups — list with delete option */}
+      {/* Saved groups — chips with rename + delete */}
       {groups.length > 0 && (
         <div className="mb-3 flex flex-wrap gap-1.5">
           {groups.map((g) => {
             const memberCount = groupMemberMap.get(g.id)?.size ?? 0
+            const isRenaming = renamingGroupId === g.id
             return (
-              <span
-                key={g.id}
-                className="inline-flex items-center gap-1 pl-2.5 pr-1 py-1 text-xs rounded-full bg-blue-50 text-blue-700 border border-blue-200"
-              >
-                <span className="font-medium">{g.name}</span>
-                <span className="text-blue-400">({memberCount})</span>
-                <button
-                  onClick={(e) => handleDeleteGroup(e, g.id)}
-                  className="w-4 h-4 flex items-center justify-center rounded-full text-blue-400 hover:text-blue-700 hover:bg-blue-100 transition-colors"
-                  title={`Delete group "${g.name}"`}
-                >
-                  ×
-                </button>
+              <span key={g.id} className="inline-flex items-center gap-1 pl-2.5 pr-1 py-1 text-xs rounded-full bg-blue-50 text-blue-700 border border-blue-200">
+                {isRenaming ? (
+                  <form onSubmit={handleSaveRename} className="flex items-center gap-1">
+                    <input
+                      ref={renameInputRef}
+                      type="text"
+                      value={renameValue}
+                      onChange={(e) => setRenameValue(e.target.value)}
+                      className="w-28 text-xs border border-blue-300 rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-400 bg-white"
+                    />
+                    <button
+                      type="submit"
+                      disabled={renamingSaving || !renameValue.trim()}
+                      className="px-1.5 py-0.5 text-xs bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white rounded font-medium"
+                    >
+                      {renamingSaving ? '…' : 'Save'}
+                    </button>
+                    <button type="button" onClick={handleCancelRename}
+                      className="px-1.5 py-0.5 text-xs bg-white hover:bg-gray-100 text-gray-500 border border-gray-200 rounded">
+                      ✕
+                    </button>
+                  </form>
+                ) : (
+                  <>
+                    <span className="font-medium">{g.name}</span>
+                    <span className="text-blue-400">({memberCount})</span>
+                    <button
+                      onClick={() => handleStartRename(g)}
+                      className="w-4 h-4 flex items-center justify-center rounded-full text-blue-300 hover:text-blue-600 hover:bg-blue-100 transition-colors text-xs"
+                      title={`Rename "${g.name}"`}
+                    >
+                      ✎
+                    </button>
+                    <button
+                      onClick={(e) => handleDeleteGroup(e, g.id)}
+                      className="w-4 h-4 flex items-center justify-center rounded-full text-blue-300 hover:text-red-500 hover:bg-red-50 transition-colors"
+                      title={`Delete "${g.name}"`}
+                    >
+                      ×
+                    </button>
+                  </>
+                )}
               </span>
             )
           })}
@@ -449,10 +524,7 @@ export function RosterPanel({
       <div className="flex items-center gap-2 mb-3 p-3 bg-blue-50 rounded-lg border border-blue-100">
         <label className="text-sm text-blue-800 font-medium whitespace-nowrap">Default rakeback %</label>
         <input
-          type="number"
-          min="0"
-          max="100"
-          step="0.1"
+          type="number" min="0" max="100" step="0.1"
           defaultValue={defaultPct}
           onChange={(e) => onDefaultPctChange(parseFloat(e.target.value) || 0)}
           className="w-20 text-sm border border-blue-200 rounded px-2 py-1 text-right focus:outline-none focus:ring-2 focus:ring-blue-400"
@@ -461,7 +533,7 @@ export function RosterPanel({
         <span className="text-xs text-blue-500 ml-1">applied to new players</span>
       </div>
 
-      {/* Search + This week toggle + Group filter */}
+      {/* Search + This week toggle */}
       <div className="flex gap-2 mb-2">
         <div className="relative flex-1">
           <input
@@ -482,18 +554,6 @@ export function RosterPanel({
             </button>
           )}
         </div>
-        {groups.length > 0 && (
-          <select
-            value={activeGroupId ?? ''}
-            onChange={(e) => onGroupFilterChange(e.target.value || null)}
-            className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 text-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white max-w-[120px]"
-          >
-            <option value="">All groups</option>
-            {groups.map((g) => (
-              <option key={g.id} value={g.id}>{g.name}</option>
-            ))}
-          </select>
-        )}
         <button
           onClick={handleThisWeekToggle}
           disabled={!thisWeekNicknames}
@@ -537,13 +597,16 @@ export function RosterPanel({
                   onChange={handleSelectAll}
                   disabled={pageIds.length === 0}
                   className="w-3.5 h-3.5 accent-blue-500 cursor-pointer disabled:cursor-default"
-                  title="Select all on this page"
                 />
               </th>
               <SortHeader label="Nickname" colKey="nickname" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} className="px-3 text-left" />
               <SortHeader label="%" colKey="rakeback_pct" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} className="px-3 text-right" />
               <SortHeader label="Last Seen" colKey="last_seen" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} className="px-3 text-center" />
-              <th className="px-3 py-2"></th>
+              <th className="px-3 py-2 w-24 text-right">
+                {activeGroupId && (
+                  <span className="text-xs text-blue-400 font-normal normal-case tracking-normal">Group</span>
+                )}
+              </th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
@@ -556,52 +619,66 @@ export function RosterPanel({
                 </td>
               </tr>
             )}
-            {pageSlice.map((player) => (
-              <tr
-                key={player.id}
-                className={`hover:bg-gray-50 ${selectedIds.has(player.id) ? 'bg-blue-50' : ''}`}
-              >
-                <td className="pl-3 pr-1 py-2 w-6">
-                  <input
-                    type="checkbox"
-                    checked={selectedIds.has(player.id)}
-                    onChange={() => handleSelectOne(player.id)}
-                    className="w-3.5 h-3.5 accent-blue-500 cursor-pointer"
-                  />
-                </td>
-                <td className="px-3 py-2 font-medium text-gray-800">{player.nickname}</td>
-                <td className="px-3 py-2 text-right">
-                  <div className="flex items-center justify-end gap-1">
+            {pageSlice.map((player) => {
+              const isMember = activeMembers?.has(player.nickname.toLowerCase()) ?? false
+              const isToggling = togglingMembership.has(player.id)
+              return (
+                <tr
+                  key={player.id}
+                  className={`hover:bg-gray-50 ${selectedIds.has(player.id) ? 'bg-blue-50' : isMember ? 'bg-blue-50/40' : ''}`}
+                >
+                  <td className="pl-3 pr-1 py-2 w-6">
                     <input
-                      type="number"
-                      min="0"
-                      max="100"
-                      step="0.1"
-                      defaultValue={player.rakeback_pct}
-                      key={`${player.id}-${player.rakeback_pct}`}
-                      onChange={(e) => handlePctChange(player.id, e.target.value)}
-                      className="w-16 text-sm border border-gray-200 rounded px-2 py-0.5 text-right focus:outline-none focus:ring-2 focus:ring-blue-400"
+                      type="checkbox"
+                      checked={selectedIds.has(player.id)}
+                      onChange={() => handleSelectOne(player.id)}
+                      className="w-3.5 h-3.5 accent-blue-500 cursor-pointer"
                     />
-                    <span className="text-gray-400 text-xs">%</span>
-                    {saving[player.id] && (
-                      <span className="text-blue-400 text-xs">•</span>
-                    )}
-                  </div>
-                </td>
-                <td className="px-3 py-2 text-center text-gray-400 text-xs">
-                  {player.last_seen || '—'}
-                </td>
-                <td className="px-3 py-2 text-center">
-                  <button
-                    onClick={() => onRemovePlayer(player.id)}
-                    className="text-gray-300 hover:text-red-400 transition-colors text-base leading-none"
-                    title="Remove player"
-                  >
-                    ×
-                  </button>
-                </td>
-              </tr>
-            ))}
+                  </td>
+                  <td className="px-3 py-2 font-medium text-gray-800">{player.nickname}</td>
+                  <td className="px-3 py-2 text-right">
+                    <div className="flex items-center justify-end gap-1">
+                      <input
+                        type="number" min="0" max="100" step="0.1"
+                        defaultValue={player.rakeback_pct}
+                        key={`${player.id}-${player.rakeback_pct}`}
+                        onChange={(e) => handlePctChange(player.id, e.target.value)}
+                        className="w-16 text-sm border border-gray-200 rounded px-2 py-0.5 text-right focus:outline-none focus:ring-2 focus:ring-blue-400"
+                      />
+                      <span className="text-gray-400 text-xs">%</span>
+                      {saving[player.id] && <span className="text-blue-400 text-xs">•</span>}
+                    </div>
+                  </td>
+                  <td className="px-3 py-2 text-center text-gray-400 text-xs">
+                    {player.last_seen || '—'}
+                  </td>
+                  <td className="px-3 py-2 text-right">
+                    <div className="flex items-center justify-end gap-1.5">
+                      {activeGroupId && (
+                        <button
+                          onClick={() => handleToggleMembership(player)}
+                          disabled={isToggling}
+                          className={`px-2 py-0.5 text-xs rounded font-medium transition-colors disabled:opacity-40 ${
+                            isMember
+                              ? 'bg-red-50 text-red-500 hover:bg-red-100 border border-red-200'
+                              : 'bg-green-50 text-green-600 hover:bg-green-100 border border-green-200'
+                          }`}
+                        >
+                          {isToggling ? '…' : isMember ? 'Remove' : 'Add'}
+                        </button>
+                      )}
+                      <button
+                        onClick={() => onRemovePlayer(player.id)}
+                        className="text-gray-300 hover:text-red-400 transition-colors text-base leading-none"
+                        title="Remove player from roster"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              )
+            })}
           </tbody>
         </table>
       </div>
@@ -635,19 +712,12 @@ export function RosterPanel({
       {/* Add player form */}
       <form onSubmit={handleAdd} className="mt-3 flex gap-2">
         <input
-          type="text"
-          placeholder="Nickname"
-          value={addName}
+          type="text" placeholder="Nickname" value={addName}
           onChange={(e) => setAddName(e.target.value)}
           className="flex-1 text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-400"
         />
         <input
-          type="number"
-          placeholder="%"
-          min="0"
-          max="100"
-          step="0.1"
-          value={addPct}
+          type="number" placeholder="%" min="0" max="100" step="0.1" value={addPct}
           onChange={(e) => setAddPct(e.target.value)}
           className="w-16 text-sm border border-gray-200 rounded-lg px-2 py-2 text-right focus:outline-none focus:ring-2 focus:ring-blue-400"
         />
