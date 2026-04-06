@@ -17,11 +17,40 @@ function parseCsvRoster(text) {
   return rows
 }
 
+// Parse a group CSV. Supports:
+//   - 1 column: nickname only
+//   - 2 columns: nickname, rakeback% (% symbol stripped automatically)
+// Returns { nicknames: string[], pctUpdates: {nickname, rakeback_pct}[] }
 function parseGroupCsv(text) {
-  return text
-    .split(/\r?\n/)
-    .map((l) => l.trim().replace(/^"|"$/g, ''))
-    .filter(Boolean)
+  const nicknames = []
+  const pctUpdates = []
+
+  for (const rawLine of text.split(/\r?\n/)) {
+    // Split on comma, strip outer quotes, trim, remove hidden unicode chars
+    const cols = rawLine
+      .split(',')
+      .map((c) =>
+        c
+          .trim()
+          .replace(/^"|"$/g, '')
+          .replace(/[\u200B\u00A0\uFEFF\r]/g, '')
+          .trim()
+      )
+
+    const nickname = cols[0]
+    if (!nickname) continue
+
+    nicknames.push(nickname)
+
+    if (cols.length >= 2 && cols[1]) {
+      const pct = parseFloat(cols[1].replace('%', '').trim())
+      if (!isNaN(pct) && pct >= 0 && pct <= 100) {
+        pctUpdates.push({ nickname, rakeback_pct: pct })
+      }
+    }
+  }
+
+  return { nicknames, pctUpdates }
 }
 
 function SortHeader({ label, colKey, sortKey, sortDir, onSort, className = '' }) {
@@ -82,7 +111,8 @@ export function RosterPanel({
   const [selectedIds, setSelectedIds] = useState(new Set())
 
   // Group CSV import
-  const [pendingGroupNicknames, setPendingGroupNicknames] = useState(null)
+  const [pendingGroupNicknames, setPendingGroupNicknames] = useState(null)  // string[]
+  const [pendingPctUpdates, setPendingPctUpdates] = useState([])            // {nickname, rakeback_pct}[]
   const [groupName, setGroupName] = useState('')
   const [savingGroup, setSavingGroup] = useState(false)
   const [groupImportStatus, setGroupImportStatus] = useState(null)
@@ -181,7 +211,7 @@ export function RosterPanel({
     if (!file) return
     const reader = new FileReader()
     reader.onload = (ev) => {
-      const nicknames = parseGroupCsv(ev.target.result)
+      const { nicknames, pctUpdates } = parseGroupCsv(ev.target.result)
       if (nicknames.length === 0) {
         setGroupImportStatus({ error: 'No nicknames found in file.' })
         setTimeout(() => setGroupImportStatus(null), 5000)
@@ -189,6 +219,7 @@ export function RosterPanel({
       }
       setGroupName(new Date().toISOString().slice(0, 10))
       setPendingGroupNicknames(nicknames)
+      setPendingPctUpdates(pctUpdates)
     }
     reader.readAsText(file)
   }
@@ -199,11 +230,23 @@ export function RosterPanel({
     if (!name || !pendingGroupNicknames?.length) return
     setSavingGroup(true)
     try {
+      // Create the group and add all members
       await onCreateGroupWithMembers(name, pendingGroupNicknames)
-      setGroupImportStatus({ created: pendingGroupNicknames.length, name })
+
+      // If the CSV had a pct column, bulk-update those players in the roster
+      if (pendingPctUpdates.length > 0) {
+        await onImportCsv(pendingPctUpdates)
+      }
+
+      setGroupImportStatus({
+        created: pendingGroupNicknames.length,
+        name,
+        pctUpdated: pendingPctUpdates.length,
+      })
       setPendingGroupNicknames(null)
+      setPendingPctUpdates([])
       setGroupName('')
-      setTimeout(() => setGroupImportStatus(null), 5000)
+      setTimeout(() => setGroupImportStatus(null), 6000)
     } catch (err) {
       setGroupImportStatus({ error: err.message })
     } finally {
@@ -213,6 +256,7 @@ export function RosterPanel({
 
   const handleCancelGroup = () => {
     setPendingGroupNicknames(null)
+    setPendingPctUpdates([])
     setGroupName('')
   }
 
@@ -410,7 +454,9 @@ export function RosterPanel({
       {pendingGroupNicknames && (
         <div className="mb-3 p-3 bg-blue-50 border border-blue-200 rounded-lg">
           <p className="text-xs text-blue-700 font-medium mb-2">
-            {pendingGroupNicknames.length} nickname{pendingGroupNicknames.length === 1 ? '' : 's'} found — name this group:
+            {pendingGroupNicknames.length} nickname{pendingGroupNicknames.length === 1 ? '' : 's'} found
+            {pendingPctUpdates.length > 0 && ` · ${pendingPctUpdates.length} with rakeback % to update`}
+            {' '}— name this group:
           </p>
           <form onSubmit={handleSaveGroup} className="flex gap-2">
             <input
@@ -445,7 +491,7 @@ export function RosterPanel({
         }`}>
           {groupImportStatus.error
             ? `Group import failed: ${groupImportStatus.error}`
-            : `Group "${groupImportStatus.name}" saved with ${groupImportStatus.created} players`}
+            : `Group "${groupImportStatus.name}" saved with ${groupImportStatus.created} players${groupImportStatus.pctUpdated ? ` · ${groupImportStatus.pctUpdated} rakeback % updated` : ''}`}
         </div>
       )}
 
