@@ -237,6 +237,7 @@ export default function App() {
                 <PayoutTable
                   rows={payoutRows}
                   activeGroupMembers={activeGroupMembers}
+                  activeGroupName={activeGroup?.name}
                   periodLabel={parsedFile.periodLabel}
                   onTogglePaid={handleTogglePaid}
                   onSaveWeek={handleSaveWeek}

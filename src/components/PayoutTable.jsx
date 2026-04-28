@@ -32,7 +32,7 @@ function applySort(rows, sortMode) {
   }
 }
 
-export function PayoutTable({ rows, activeGroupMembers, periodLabel, onTogglePaid, onSaveWeek, onSettleWeek, savedWeekId }) {
+export function PayoutTable({ rows, activeGroupMembers, activeGroupName, periodLabel, onTogglePaid, onSaveWeek, onSettleWeek, savedWeekId }) {
   const [sortMode, setSortMode] = useState('file')
   const [hideLow, setHideLow] = useState(false)
   const [newOnly, setNewOnly] = useState(false)
@@ -56,8 +56,10 @@ export function PayoutTable({ rows, activeGroupMembers, periodLabel, onTogglePai
     filteredRows = rows
   }
 
-  const totalRake = filteredRows.reduce((s, r) => s + r.rakeTotal, 0)
-  const totalPayout = filteredRows.reduce((s, r) => s + r.payout, 0)
+  const overallRake = rows.reduce((s, r) => s + r.rakeTotal, 0)
+  const overallPayout = rows.reduce((s, r) => s + r.payout, 0)
+  const groupRake = activeGroupMembers ? filteredRows.reduce((s, r) => s + r.rakeTotal, 0) : null
+  const groupPayout = activeGroupMembers ? filteredRows.reduce((s, r) => s + r.payout, 0) : null
   const allPaid = filteredRows.every((r) => r.paid)
   const lowCount = filteredRows.filter((r) => r.payout < LOW_PAYOUT_THRESHOLD).length
   const newCount = filteredRows.filter((r) => r.isNew).length
@@ -69,51 +71,62 @@ export function PayoutTable({ rows, activeGroupMembers, periodLabel, onTogglePai
   return (
     <div className="mt-4">
       {/* Summary bar */}
-      <div className="flex flex-wrap items-center justify-between gap-3 mb-4 p-4 bg-gray-900 text-white rounded-xl">
-        <div>
-          <p className="text-xs text-gray-400 uppercase tracking-wide">Period</p>
-          <p className="font-semibold">{periodLabel}</p>
-          {activeGroupMembers && (
-            <p className="text-xs text-blue-400 mt-0.5">{filteredRows.length} players in group</p>
-          )}
-        </div>
-        <div>
-          <p className="text-xs text-gray-400 uppercase tracking-wide">Total Rake</p>
-          <p className="font-semibold">${totalRake.toFixed(2)}</p>
-        </div>
-        <div>
-          <p className="text-xs text-gray-400 uppercase tracking-wide">Total Rakeback Owed</p>
-          <p className="text-2xl font-bold text-green-400">${totalPayout.toFixed(2)}</p>
-        </div>
-        <div className="flex gap-2">
-          <button
-            onClick={() => exportPayoutCsv(filteredRows, periodLabel)}
-            className="px-3 py-1.5 text-sm bg-white text-gray-900 rounded-lg hover:bg-gray-100 font-medium"
-          >
-            Export CSV
-          </button>
-          {!savedWeekId && (
+      <div className="mb-4 bg-gray-900 text-white rounded-xl overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-3 p-4">
+          <div>
+            <p className="text-xs text-gray-400 uppercase tracking-wide">Period</p>
+            <p className="font-semibold">{periodLabel}</p>
+          </div>
+          <div>
+            <p className="text-xs text-gray-400 uppercase tracking-wide">Total Rake</p>
+            <p className="font-semibold">${overallRake.toFixed(2)}</p>
+          </div>
+          <div>
+            <p className="text-xs text-gray-400 uppercase tracking-wide">Total Rakeback Owed</p>
+            <p className="text-2xl font-bold text-green-400">${overallPayout.toFixed(2)}</p>
+          </div>
+          <div className="flex gap-2">
             <button
-              onClick={onSaveWeek}
-              className="px-3 py-1.5 text-sm bg-blue-500 hover:bg-blue-600 rounded-lg font-medium"
+              onClick={() => exportPayoutCsv(filteredRows, periodLabel)}
+              className="px-3 py-1.5 text-sm bg-white text-gray-900 rounded-lg hover:bg-gray-100 font-medium"
             >
-              Save this week
+              Export CSV
             </button>
-          )}
-          {savedWeekId && !allPaid && (
-            <button
-              onClick={onSettleWeek}
-              className="px-3 py-1.5 text-sm bg-emerald-500 hover:bg-emerald-600 rounded-lg font-medium"
-            >
-              Settle week
-            </button>
-          )}
-          {savedWeekId && allPaid && (
-            <span className="px-3 py-1.5 text-sm bg-emerald-700 rounded-lg font-medium opacity-70">
-              All paid ✓
+            {!savedWeekId && (
+              <button
+                onClick={onSaveWeek}
+                className="px-3 py-1.5 text-sm bg-blue-500 hover:bg-blue-600 rounded-lg font-medium"
+              >
+                Save this week
+              </button>
+            )}
+            {savedWeekId && !allPaid && (
+              <button
+                onClick={onSettleWeek}
+                className="px-3 py-1.5 text-sm bg-emerald-500 hover:bg-emerald-600 rounded-lg font-medium"
+              >
+                Settle week
+              </button>
+            )}
+            {savedWeekId && allPaid && (
+              <span className="px-3 py-1.5 text-sm bg-emerald-700 rounded-lg font-medium opacity-70">
+                All paid ✓
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Group summary sub-bar — only when a group filter is active */}
+        {activeGroupMembers && (
+          <div className="flex flex-wrap gap-6 px-4 py-2.5 bg-blue-800 border-t border-blue-700 text-blue-100 text-sm">
+            <span className="font-medium text-white">
+              {activeGroupName ? `Group: ${activeGroupName}` : 'Active group'}
+              <span className="ml-1.5 text-blue-300 font-normal text-xs">({filteredRows.length} players)</span>
             </span>
-          )}
-        </div>
+            <span>Rake: <span className="font-semibold text-white">${groupRake.toFixed(2)}</span></span>
+            <span>Rakeback owed: <span className="font-semibold text-green-300">${groupPayout.toFixed(2)}</span></span>
+          </div>
+        )}
       </div>
 
       {/* No group matches */}

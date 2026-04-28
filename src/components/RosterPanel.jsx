@@ -137,6 +137,13 @@ export function RosterPanel({
   // Per-row group membership toggle loading
   const [togglingMembership, setTogglingMembership] = useState(new Set())
 
+  // Group-scoped roster filter: auto-enable when a group is selected
+  const [groupMembersOnly, setGroupMembersOnly] = useState(false)
+  useEffect(() => {
+    setGroupMembersOnly(!!activeGroupId)
+    setPage(1)
+  }, [activeGroupId])
+
   const debounceTimers = useRef({})
   const importInputRef = useRef(null)
   const groupImportInputRef = useRef(null)
@@ -243,7 +250,7 @@ export function RosterPanel({
     setSavingGroup(true)
     try {
       // Create the group and add all members
-      await onCreateGroupWithMembers(name, pendingGroupNicknames)
+      const newGroup = await onCreateGroupWithMembers(name, pendingGroupNicknames)
 
       // If the CSV had a pct column, bulk-update those players in the roster
       if (pendingPctUpdates.length > 0) {
@@ -259,6 +266,9 @@ export function RosterPanel({
       setPendingPctUpdates([])
       setGroupName('')
       setTimeout(() => setGroupImportStatus(null), 6000)
+
+      // Switch to the newly created group view
+      onGroupFilterChange(newGroup.id)
     } catch (err) {
       setGroupImportStatus({ error: err.message })
     } finally {
@@ -377,9 +387,13 @@ export function RosterPanel({
     if (activeGroupId === groupId) onGroupFilterChange(null)
   }
 
-  // Filter → sort → paginate (no group-membership filter here — roster always shows all players)
+  // Filter → sort → paginate
   const filtered = useMemo(() => {
     let result = roster
+    if (groupMembersOnly && activeGroupId) {
+      const members = groupMemberMap.get(activeGroupId)
+      if (members) result = result.filter((p) => members.has(p.nickname.toLowerCase()))
+    }
     if (thisWeekOnly && thisWeekNicknames) {
       result = result.filter((p) => thisWeekNicknames.has(p.nickname))
     }
@@ -388,7 +402,7 @@ export function RosterPanel({
       result = result.filter((p) => p.nickname.toLowerCase().includes(q))
     }
     return result
-  }, [roster, search, thisWeekOnly, thisWeekNicknames])
+  }, [roster, search, thisWeekOnly, thisWeekNicknames, groupMembersOnly, activeGroupId, groupMemberMap])
 
   const sorted = useMemo(() => {
     return [...filtered].sort((a, b) => {
@@ -559,6 +573,25 @@ export function RosterPanel({
               </span>
             )
           })}
+        </div>
+      )}
+
+      {/* Group view toggle — shown when a group is active */}
+      {activeGroupId && (
+        <div className="mb-3 flex items-center gap-2">
+          <span className="text-xs text-blue-700 font-medium">
+            Group: {groups.find((g) => g.id === activeGroupId)?.name}
+          </span>
+          <button
+            onClick={() => { setGroupMembersOnly((v) => !v); setPage(1) }}
+            className={`px-2.5 py-1 text-xs rounded-lg font-medium transition-colors border ${
+              groupMembersOnly
+                ? 'bg-blue-600 text-white border-blue-600'
+                : 'bg-white text-blue-600 border-blue-300 hover:bg-blue-50'
+            }`}
+          >
+            {groupMembersOnly ? 'Group members only' : 'All players'}
+          </button>
         </div>
       )}
 
