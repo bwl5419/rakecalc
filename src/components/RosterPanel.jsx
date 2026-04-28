@@ -454,10 +454,22 @@ export function RosterPanel({
   return (
     <div className="flex flex-col h-full">
       {/* Header row */}
-      <div className="flex items-center justify-between mb-3">
+      <div className="flex items-center justify-between mb-1">
         <h2 className="text-base font-semibold text-gray-900">Player Roster</h2>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap justify-end">
           <span className="text-xs text-gray-400">{roster.length} players</span>
+          <select
+            value={activeGroupId || ''}
+            onChange={(e) => onGroupFilterChange(e.target.value || null)}
+            className="text-xs border border-gray-200 rounded-lg px-2 py-1 bg-white text-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-400"
+          >
+            <option value="">All Players</option>
+            {groups.map((g) => (
+              <option key={g.id} value={g.id}>
+                {g.name} ({groupMemberMap.get(g.id)?.size ?? 0})
+              </option>
+            ))}
+          </select>
           <button
             onClick={() => groupImportInputRef.current?.click()}
             className="px-2.5 py-1 text-xs bg-blue-50 hover:bg-blue-100 text-blue-600 border border-blue-200 rounded-lg font-medium transition-colors"
@@ -489,6 +501,13 @@ export function RosterPanel({
           />
         </div>
       </div>
+      {/* Active group status line */}
+      <p className="text-xs text-gray-400 mb-3">
+        Active group:{' '}
+        <span className="font-medium text-gray-600">
+          {activeGroupId ? (groups.find((g) => g.id === activeGroupId)?.name ?? 'Unknown') : 'All Players'}
+        </span>
+      </p>
 
       {/* Group name prompt */}
       {pendingGroupNicknames && (
