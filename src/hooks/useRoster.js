@@ -145,32 +145,22 @@ export function useRoster() {
         }
       }
 
-      const results = []
       if (toUpdate.length > 0) {
-        const { data, error } = await supabase
+        const { error } = await supabase
           .from('roster')
           .upsert(toUpdate, { onConflict: 'id' })
-          .select()
         if (error) throw error
-        results.push(...data)
       }
       if (toInsert.length > 0) {
-        const { data, error } = await supabase
+        const { error } = await supabase
           .from('roster')
           .insert(toInsert)
-          .select()
         if (error) throw error
-        results.push(...data)
       }
 
-      setRoster((prev) => {
-        const map = new Map(prev.map((p) => [p.id, p]))
-        for (const p of results) map.set(p.id, p)
-        return [...map.values()].sort((a, b) => a.nickname.localeCompare(b.nickname))
-      })
-      return results
+      await fetchRoster()
     },
-    [rosterLowerMap]
+    [rosterLowerMap, fetchRoster]
   )
 
   // Bulk import from CSV rows: [{ nickname, rakeback_pct }].
@@ -197,32 +187,23 @@ export function useRoster() {
         }
       }
 
-      const results = []
       if (toUpdate.length > 0) {
-        const { data, error } = await supabase
+        const { error } = await supabase
           .from('roster')
           .upsert(toUpdate, { onConflict: 'id' })
-          .select()
         if (error) throw error
-        results.push(...data)
       }
       if (toInsert.length > 0) {
-        const { data, error } = await supabase
+        const { error } = await supabase
           .from('roster')
           .insert(toInsert)
-          .select()
         if (error) throw error
-        results.push(...data)
       }
 
-      setRoster((prev) => {
-        const map = new Map(prev.map((p) => [p.id, p]))
-        for (const p of results) map.set(p.id, p)
-        return [...map.values()].sort((a, b) => a.nickname.localeCompare(b.nickname))
-      })
+      await fetchRoster()
       return { created: toInsert.length, updated: toUpdate.length }
     },
-    [rosterLowerMap]
+    [rosterLowerMap, fetchRoster]
   )
 
   // Groups of players whose nicknames match case-insensitively with >1 entry.
@@ -238,7 +219,7 @@ export function useRoster() {
     return [...map.values()].filter((g) => g.length > 1)
   }, [roster])
 
-  const resolveGroup = useCallback(async (keepId, deleteIds) => {
+  const resolveGroup = useCallback(async (_keepId, deleteIds) => {
     const { error } = await supabase.from('roster').delete().in('id', deleteIds)
     if (error) throw error
     setRoster((prev) => prev.filter((p) => !deleteIds.includes(p.id)))
