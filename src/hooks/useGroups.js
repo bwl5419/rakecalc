@@ -1,101 +1,100 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
-import { supabase } from '../lib/supabase'
+import { useState, useCallback, useMemo } from 'react'
+
+const GROUPS_KEY = 'rakecalc_groups'
+const MEMBERS_KEY = 'rakecalc_group_members'
+
+function loadGroups() {
+  try {
+    return JSON.parse(localStorage.getItem(GROUPS_KEY) ?? '[]')
+  } catch {
+    return []
+  }
+}
+
+function loadMembers() {
+  try {
+    return JSON.parse(localStorage.getItem(MEMBERS_KEY) ?? '[]')
+  } catch {
+    return []
+  }
+}
+
+function persist(key, value) {
+  localStorage.setItem(key, JSON.stringify(value))
+}
+
+function makeId() {
+  return typeof crypto !== 'undefined' && crypto.randomUUID
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`
+}
 
 export function useGroups() {
-  const [groups, setGroups] = useState([])
-  const [groupMembers, setGroupMembers] = useState([]) // [{ group_id, player_nickname }]
-  const [loading, setLoading] = useState(true)
+  const [groups, setGroups] = useState(loadGroups)
+  const [groupMembers, setGroupMembers] = useState(loadMembers)
 
-  const fetchGroups = useCallback(async () => {
-    setLoading(true)
-    const [{ data: groupsData, error: groupsErr }, { data: membersData, error: membersErr }] =
-      await Promise.all([
-        supabase.from('player_groups').select('*').order('created_at', { ascending: true }),
-        supabase.from('player_group_members').select('*'),
-      ])
-    if (!groupsErr) setGroups(groupsData ?? [])
-    if (!membersErr) setGroupMembers(membersData ?? [])
-    setLoading(false)
-  }, [])
-
-  useEffect(() => {
-    fetchGroups()
-  }, [fetchGroups])
-
-  // Create a group and populate it with members in one shot.
-  // Nicknames are lowercased before storage so matching is always case-insensitive.
-  const createGroupWithMembers = useCallback(async (name, nicknames) => {
-    const { data: group, error: groupErr } = await supabase
-      .from('player_groups')
-      .insert({ name: name.trim() })
-      .select()
-      .single()
-    if (groupErr) throw groupErr
-
-    const unique = [...new Set(nicknames.map((n) => n.trim().toLowerCase()).filter(Boolean))]
-    console.log(`[useGroups] createGroupWithMembers "${name}" — saving ${unique.length} nicknames to Supabase:`, unique)
-    if (unique.length > 0) {
-      const rows = unique.map((n) => ({ group_id: group.id, player_nickname: n }))
-      const { error: membersErr } = await supabase
-        .from('player_group_members')
-        .insert(rows)
-      if (membersErr) throw membersErr
-      setGroupMembers((prev) => [...prev, ...rows])
+  const createGroupWithMembers = useCallback((name, nicknames) => {
+    const group = {
+      id: makeId(),
+      name: name.trim(),
+      created_at: new Date().toISOString(),
     }
+    const unique = [...new Set(nicknames.map((n) => n.trim().toLowerCase()).filter(Boolean))]
+    const rows = unique.map((n) => ({ group_id: group.id, player_nickname: n }))
 
-    setGroups((prev) => [...prev, group])
+    setGroups((prev) => {
+      const next = [...prev, group]
+      persist(GROUPS_KEY, next)
+      return next
+    })
+    setGroupMembers((prev) => {
+      const next = [...prev, ...rows]
+      persist(MEMBERS_KEY, next)
+      return next
+    })
     return group
   }, [])
 
-  const deleteGroup = useCallback(async (id) => {
-    const { error } = await supabase.from('player_groups').delete().eq('id', id)
-    if (error) throw error
-    setGroups((prev) => prev.filter((g) => g.id !== id))
-    setGroupMembers((prev) => prev.filter((m) => m.group_id !== id))
-  }, [])
-
-  const renameGroup = useCallback(async (id, newName) => {
-    const { data, error } = await supabase
-      .from('player_groups')
-      .update({ name: newName.trim() })
-      .eq('id', id)
-      .select()
-      .single()
-    if (error) throw error
-    setGroups((prev) => prev.map((g) => (g.id === id ? data : g)))
-  }, [])
-
-  // Add a single player to a group (lowercase nickname for consistent storage)
-  const addPlayerToGroup = useCallback(async (groupId, nickname) => {
-    const lc = nickname.trim().toLowerCase()
-    const { error } = await supabase
-      .from('player_group_members')
-      .upsert(
-        { group_id: groupId, player_nickname: lc },
-        { onConflict: 'group_id,player_nickname', ignoreDuplicates: true }
-      )
-    if (error) throw error
+  const deleteGroup = useCallback((id) => {
+    setGroups((prev) => {
+      const next = prev.filter((g) => g.id !== id)
+      persist(GROUPS_KEY, next)
+      return next
+    })
     setGroupMembers((prev) => {
-      const exists = prev.some((m) => m.group_id === groupId && m.player_nickname === lc)
-      return exists ? prev : [...prev, { group_id: groupId, player_nickname: lc }]
+      const next = prev.filter((m) => m.group_id !== id)
+      persist(MEMBERS_KEY, next)
+      return next
     })
   }, [])
 
-  // Remove a single player from a group
-  const removePlayerFromGroup = useCallback(async (groupId, nickname) => {
-    const lc = nickname.trim().toLowerCase()
-    const { error } = await supabase
-      .from('player_group_members')
-      .delete()
-      .eq('group_id', groupId)
-      .eq('player_nickname', lc)
-    if (error) throw error
-    setGroupMembers((prev) =>
-      prev.filter((m) => !(m.group_id === groupId && m.player_nickname === lc))
-    )
+  const renameGroup = useCallback((id, newName) => {
+    setGroups((prev) => {
+      const next = prev.map((g) => (g.id === id ? { ...g, name: newName.trim() } : g))
+      persist(GROUPS_KEY, next)
+      return next
+    })
   }, [])
 
-  // groupId -> Set<lowercase nickname>
+  const addPlayerToGroup = useCallback((groupId, nickname) => {
+    const lc = nickname.trim().toLowerCase()
+    setGroupMembers((prev) => {
+      if (prev.some((m) => m.group_id === groupId && m.player_nickname === lc)) return prev
+      const next = [...prev, { group_id: groupId, player_nickname: lc }]
+      persist(MEMBERS_KEY, next)
+      return next
+    })
+  }, [])
+
+  const removePlayerFromGroup = useCallback((groupId, nickname) => {
+    const lc = nickname.trim().toLowerCase()
+    setGroupMembers((prev) => {
+      const next = prev.filter((m) => !(m.group_id === groupId && m.player_nickname === lc))
+      persist(MEMBERS_KEY, next)
+      return next
+    })
+  }, [])
+
   const groupMemberMap = useMemo(() => {
     const map = new Map()
     for (const m of groupMembers) {
@@ -108,7 +107,7 @@ export function useGroups() {
   return {
     groups,
     groupMemberMap,
-    loading,
+    loading: false,
     createGroupWithMembers,
     deleteGroup,
     renameGroup,

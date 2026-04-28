@@ -228,6 +228,7 @@ export function RosterPanel({
     const file = e.target.files?.[0]
     e.target.value = ''
     if (!file) return
+    const defaultName = file.name.replace(/\.[^.]+$/, '')
     const reader = new FileReader()
     reader.onload = (ev) => {
       const { nicknames, pctUpdates } = parseGroupCsv(ev.target.result)
@@ -236,7 +237,7 @@ export function RosterPanel({
         setTimeout(() => setGroupImportStatus(null), 5000)
         return
       }
-      setGroupName(new Date().toISOString().slice(0, 10))
+      setGroupName(defaultName)
       setPendingGroupNicknames(nicknames)
       setPendingPctUpdates(pctUpdates)
     }
@@ -249,18 +250,31 @@ export function RosterPanel({
     if (!name || !pendingGroupNicknames?.length) return
     setSavingGroup(true)
     try {
-      // Create the group and add all members
-      const newGroup = await onCreateGroupWithMembers(name, pendingGroupNicknames)
-
-      // If the CSV had a pct column, bulk-update those players in the roster
-      if (pendingPctUpdates.length > 0) {
-        await onImportCsv(pendingPctUpdates)
+      // Ensure every group member exists in the roster.
+      // New players get defaultPct (or explicit % from the CSV).
+      // Existing players only get their % updated if the CSV had an explicit value.
+      const rosterLower = new Set(roster.map((p) => p.nickname.toLowerCase()))
+      const pctMap = new Map(pendingPctUpdates.map((r) => [r.nickname.toLowerCase(), r.rakeback_pct]))
+      const toImport = []
+      for (const nick of pendingGroupNicknames) {
+        const lc = nick.toLowerCase()
+        if (!rosterLower.has(lc)) {
+          toImport.push({ nickname: nick, rakeback_pct: pctMap.get(lc) ?? defaultPct })
+        } else if (pctMap.has(lc)) {
+          toImport.push({ nickname: nick, rakeback_pct: pctMap.get(lc) })
+        }
       }
+      if (toImport.length > 0) {
+        await onImportCsv(toImport)
+      }
+
+      // Create the group and link all members
+      const newGroup = onCreateGroupWithMembers(name, pendingGroupNicknames)
 
       setGroupImportStatus({
         created: pendingGroupNicknames.length,
         name,
-        pctUpdated: pendingPctUpdates.length,
+        pctUpdated: toImport.length,
       })
       setPendingGroupNicknames(null)
       setPendingPctUpdates([])
