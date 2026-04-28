@@ -170,10 +170,15 @@ export function useRoster() {
     async (csvRows) => {
       if (!csvRows.length) return { created: 0, updated: 0 }
 
+      // Deduplicate by lowercase nickname, keeping the last occurrence.
+      const dedupedMap = new Map()
+      for (const row of csvRows) dedupedMap.set(row.nickname.toLowerCase(), row)
+      const dedupedRows = [...dedupedMap.values()]
+
       const toUpdate = []
       const toInsert = []
 
-      for (const row of csvRows) {
+      for (const row of dedupedRows) {
         const existing = rosterLowerMap.get(row.nickname.toLowerCase())
         if (existing) {
           toUpdate.push({
